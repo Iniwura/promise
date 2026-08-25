@@ -170,7 +170,7 @@ class Promise(gl.Contract):
 			try:
 				candidate = self._validate_response(result.calldata)
 				observed = gl.nondet.exec_prompt(prompt, response_format="json")
-				return candidate == self._validate_response(observed)
+				return candidate["verdict"] == self._validate_response(observed)["verdict"]
 			except Exception:
 				return False
 
