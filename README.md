@@ -1,101 +1,229 @@
-# Sample GenLayer project
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/license/mit/)
-[![Discord](https://dcbadge.vercel.app/api/server/8Jm4v89VAu?compact=true&style=flat)](https://discord.gg/8Jm4v89VAu)
-[![Telegram](https://img.shields.io/badge/Telegram--T.svg?style=social&logo=telegram)](https://t.me/genlayer)
-[![Twitter](https://img.shields.io/twitter/url/https/twitter.com/yeagerai.svg?style=social&label=Follow%20%40GenLayer)](https://x.com/GenLayer)
-[![GitHub star chart](https://img.shields.io/github/stars/yeagerai/genlayer-project-boilerplate?style=social)](https://star-history.com/#yeagerai/genlayer-js)
+# Promise
 
-## 👀 About
-This project includes the boilerplate code for a GenLayer use case implementation, specifically a football bets game.
+Promise is a GenLayer Intelligent Contract for resolving natural-language commitments after a deadline.
 
-## 📦 What's included
-- Basic requirements to deploy and test your intelligent contracts locally
-- Configuration file template
-<!-- - Test functions to write complete end-to-end tests -->
-- An example of an intelligent contract (Football Bets)
-- Example end-to-end tests for the contract provided
+A creator records a commitment, explicit fulfillment criteria, a Unix deadline, and a creator-scoped reference. After the deadline, evidence can be submitted and GenLayer validators independently evaluate whether the commitment was fulfilled.
 
-## 🛠️ Requirements
-- A running GenLayer Studio (Install from [Docs](https://docs.genlayer.com/developers/intelligent-contracts/tooling-setup#using-the-genlayer-studio) or work with the hosted version of [GenLayer Studio](https://studio.genlayer.com/)). If you are working locally, this repository code does not need to be located in the same directory as the Genlayer Studio.
+The contract resolves to one of three verdicts:
 
-## 🚀 Steps to run this example
+- `FULFILLED`
+- `FAILED`
+- `INCONCLUSIVE`
 
-### 1. Configure environment
-   Rename the `.env.example` file to `.env`, then fill in the values for your configuration. The provided values are the standard values for a tipical GenLayer Studio deployed locally.
+The final verdict, reasoning, and submitted evidence are persisted onchain.
 
-### 2. Deploy the contract
-   Deploy the contract from `/contracts/football_bets.py` using the Studio's UI:
-   1. Open the GenLayer Studio interface in your web browser (usually at http://localhost:8080).
-   2. Create a new file in the "Contracts" section and paste the content of `/contracts/football_bets.py` (the content is different than the existing contract from the examples).
-   3. Navigate to the "Run and Debug" section.
-   4. Follow the on-screen instructions to complete the deployment process.
+## Why GenLayer
 
-### 3. Setup the frontend environment
-  1. All the content of the dApp is located in the `/app` folder.
-  2. Rename the `.env.example` file in the `/app` folder to `.env`.
-  3. Add the deployed contract address to the `/app/.env` under the variable `VITE_CONTRACT_ADDRESS`
+A deterministic smart contract can enforce a timestamp, ownership rule, or exact numeric threshold. It cannot reliably determine whether an arbitrary real-world commitment written in natural language was actually fulfilled.
 
-### 4. Run the frontend Vue app
-   Ensure your GenLayer Studio is running, and execute the following commands in your terminal:
-   ```shell
-   cd app
-   npm install
-   npm run dev
-   ```
-   The terminal should display a link to access your frontend app (usually at http://localhost:5173/).
-   For more information on the code see [GenLayerJS](https://github.com/yeagerai/genlayer-js).
-   
-### 5. Test contracts
-1. Install the Python packages listed in the `requirements.txt` file in a virtual environment.
-2. Make sure your GenLayer Studio is running. Then execute the following command in your terminal:
-   ```shell
-   gltest
-   ```
+Promise uses GenLayer's nondeterministic execution and validator consensus for that interpretation step while keeping the lifecycle and state transitions onchain.
 
-## ⚽ How the Football Bets Contract Works
+The core flow is:
 
-The Football Bets contract allows users to create bets for football matches, resolve those bets, and earn points for correct bets. Here's a breakdown of its main functionalities:
+```text
+Create commitment
+      ↓
+Wait until deadline
+      ↓
+Submit evidence
+      ↓
+GenLayer validator evaluation
+      ↓
+FULFILLED / FAILED / INCONCLUSIVE
+      ↓
+Persist final resolution onchain
+```
 
-1. Creating Bets:
-   - Users can create a bet for a specific football match by providing the game date, team names, and their predicted winner.
-   - The contract checks if the game has already finished and if the user has already made a bet for this match.
+## Contract behavior
 
-2. Resolving Bets:
-   - After a match has concluded, users can resolve their bets.
-   - The contract fetches the actual match result from a specified URL.
-   - If the Bet was correct, the user earns a point.
+Each promise stores:
 
-3. Querying Data:
-   - Users can retrieve all bets.
-   - The contract also allows querying of points, either for all players or for a specific player.
+- creator
+- natural-language commitment
+- fulfillment criteria
+- deadline
+- creator-scoped reference
+- deterministic SHA-256 fingerprint of the original promise inputs
+- status
+- final verdict
+- reasoning
+- submitted evidence
 
-4. Getting Points:
-   - Points are awarded for correct bets.
-   - Users can check their total points or the points of any player.
+Important safeguards:
 
-## 🧪 Tests
+- references are unique per creator
+- the original commitment and fulfillment criteria cannot be changed after creation
+- resolution is only allowed after the deadline
+- a promise can only be resolved once
+- empty and oversized inputs are rejected
+- model responses must use the exact expected schema
+- verdicts are restricted to `FULFILLED`, `FAILED`, or `INCONCLUSIVE`
+- resolution state is written only after a valid consensus result is obtained
 
-This project includes integration tests that interact with the contract deployed in the Studio. These tests cover the main functionalities of the Football Bets contract:
+## GenLayer consensus design
 
-1. Creating a bet
-2. Resolving a bet
-3. Querying bets for a player
-4. Querying points for a player
+The leader returns strict JSON containing:
 
-The tests simulate real-world interactions with the contract, ensuring that it behaves correctly under various scenarios. They use the GenLayer Studio to deploy and interact with the contract, providing a comprehensive check of the contract's functionality in a controlled environment.
+```json
+{
+  "verdict": "FULFILLED",
+  "reasoning": "..."
+}
+```
 
-To run the tests, use the `gltest` command as mentioned in the "Steps to run this example" section.
+Validators independently evaluate the same commitment, criteria, and evidence.
 
+Consensus compares the state-changing field, `verdict`, rather than requiring free-form reasoning text to be byte-for-byte identical. Each response still has to pass strict schema and reasoning validation.
 
-## 💬 Community
-Connect with the GenLayer community to discuss, collaborate, and share insights:
-- **[Discord Channel](https://discord.gg/8Jm4v89VAu)**: Our primary hub for discussions, support, and announcements.
-- **[Telegram Group](https://t.me/genlayer)**: For more informal chats and quick updates.
+This matters because independent validators can reach the same conclusion while wording their explanations differently.
 
-Your continuous feedback drives better product development. Please engage with us regularly to test, discuss, and improve GenLayer.
+## Public methods
 
-## 📖 Documentation
-For detailed information on how to use GenLayerJS SDK, please refer to our [documentation](https://docs.genlayer.com/).
+### Views
 
-## 📜 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+- `ping()`
+- `get_promise_count()`
+- `get_promise(promise_id)`
+- `is_reference_used(reference)`
+
+### Writes
+
+- `create_promise(commitment, fulfillment_criteria, deadline, reference)`
+- `resolve_promise(promise_id, evidence)`
+
+## Tests
+
+The direct-mode test suite covers:
+
+- promise creation
+- input validation
+- creator-scoped references
+- persistence of original terms
+- deadline enforcement
+- `FULFILLED`
+- `FAILED`
+- `INCONCLUSIVE`
+- malformed model output
+- deterministic fingerprints
+- duplicate resolution prevention
+- failure-state safety
+
+Final local result:
+
+```text
+18 passed
+```
+
+## Bradbury deployment
+
+Final deployed contract:
+
+```text
+0x703AC5Aa250257AbA44034cC7AbeBd44e3C69362
+```
+
+Deployment transaction:
+
+```text
+0x1babc5f99422412cdacc897258e94c3027298fb48e9c241ee8d571ebd0bd2a23
+```
+
+The deployment finalized with:
+
+```text
+ACCEPTED
+AGREE
+FINISHED_WITH_RETURN
+```
+
+## Live Bradbury proof
+
+A live promise was created with the commitment:
+
+> Release the public beta of Project Atlas with wallet login and transaction history.
+
+Fulfillment criteria required a publicly accessible beta containing both wallet login and transaction history.
+
+After the deadline, evidence was submitted stating that the public beta was live and included both required features.
+
+Resolution transaction:
+
+```text
+0x32891c2886b5d1c23a5171ac75054349b7a0030ba45daef73a28b1d3df8b100b
+```
+
+Bradbury consensus returned:
+
+```text
+status_name: ACCEPTED
+resultName: AGREE
+txExecutionResultName: FINISHED_WITH_RETURN
+```
+
+The stored promise state was then read back as:
+
+```text
+status: RESOLVED
+verdict: FULFILLED
+```
+
+The reasoning and submitted evidence were also persisted onchain.
+
+## Run locally
+
+Create and activate a virtual environment, then install dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run the tests:
+
+```bash
+gltest test/test_promise.py -q
+```
+
+## Deploy
+
+```bash
+genlayer deploy \
+  --contract contracts/promise.py \
+  --rpc https://rpc-bradbury.genlayer.com
+```
+
+For nondeterministic resolution writes on Bradbury, the tested CLI invocation used an explicit fee distribution:
+
+```bash
+genlayer write \
+  <CONTRACT_ADDRESS> \
+  resolve_promise \
+  --rpc https://rpc-bradbury.genlayer.com \
+  --fees '{"distribution":{"leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200","rotations":["0"]}}' \
+  --args \
+  <PROMISE_ID> \
+  '<EVIDENCE>'
+```
+
+## Repository structure
+
+```text
+contracts/
+  promise.py
+
+test/
+  test_promise.py
+
+requirements.txt
+README.md
+LICENSE
+```
+
+## Status
+
+Promise V1 is implemented, locally tested, deployed to GenLayer Bradbury, and proven with a live `FULFILLED` resolution.
+
+## License
+
+MIT
