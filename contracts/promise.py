@@ -201,12 +201,14 @@ class Promise(gl.Contract):
 
         commitment = self.commitments[promise_id]
         fulfillment_criteria = self.criteria[promise_id]
+        evidence_text = evidence
+        source_urls = validated_sources
         max_source_length = self.MAX_FETCHED_SOURCE_LENGTH
 
-        def evaluate():
+        def leader():
             fetched_sources = []
             available_count = 0
-            for source_url in validated_sources:
+            for source_url in source_urls:
                 try:
                     content = gl.nondet.web.render(source_url, mode="text")
                     if type(content) is str and content.strip():
@@ -225,19 +227,40 @@ class Promise(gl.Contract):
                     "reasoning": "No independently supplied source could be retrieved.",
                 }
 
-            prompt = self._prompt(commitment, fulfillment_criteria, evidence, fetched_sources)
+            prompt = self._prompt(commitment, fulfillment_criteria, evidence_text, fetched_sources)
             return gl.nondet.exec_prompt(prompt, response_format="json")
-
-        def leader():
-            return evaluate()
 
         def validator(result):
             if not isinstance(result, gl.vm.Return):
                 return False
             try:
                 candidate = self._validate_response(result.calldata)
-                observed = self._validate_response(evaluate())
-                return candidate["verdict"] == observed["verdict"]
+
+                fetched_sources = []
+                available_count = 0
+                for source_url in source_urls:
+                    try:
+                        content = gl.nondet.web.render(source_url, mode="text")
+                        if type(content) is str and content.strip():
+                            fetched_sources.append(
+                                {"url": source_url, "available": True, "content": content[:max_source_length]}
+                            )
+                            available_count += 1
+                        else:
+                            fetched_sources.append({"url": source_url, "available": False, "content": ""})
+                    except Exception:
+                        fetched_sources.append({"url": source_url, "available": False, "content": ""})
+
+                if available_count == 0:
+                    observed = {
+                        "verdict": "INCONCLUSIVE",
+                        "reasoning": "No independently supplied source could be retrieved.",
+                    }
+                else:
+                    prompt = self._prompt(commitment, fulfillment_criteria, evidence_text, fetched_sources)
+                    observed = gl.nondet.exec_prompt(prompt, response_format="json")
+
+                return candidate["verdict"] == self._validate_response(observed)["verdict"]
             except Exception:
                 return False
 
