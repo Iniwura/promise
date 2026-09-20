@@ -1,138 +1,46 @@
-# Promise
+# Promise v3
 
 Promise is a GenLayer Intelligent Contract for resolving natural-language commitments after a deadline using independently acquired web evidence and validator consensus.
 
-A creator records a commitment, explicit fulfillment criteria, a Unix deadline, and a creator-scoped reference. After the deadline, a resolver submits supporting context plus one or more HTTPS source URLs. GenLayer validators independently fetch those sources and independently judge whether the original commitment was fulfilled.
+Promise v3 binds both resolver authority and acceptable evidence sources before the deadline. At creation time, the creator commits:
 
-The contract resolves to one of three verdicts:
+- the commitment;
+- the fulfillment criteria;
+- the deadline;
+- a creator-scoped reference; and
+- an approved HTTPS source list.
 
-- `FULFILLED`
-- `FAILED`
-- `INCONCLUSIVE`
+The approved source list is validated at creation, persisted onchain, included in the deterministic promise fingerprint, and immutable for that promise. It is the only source set used during resolution.
 
-The final verdict, reasoning, caller-supplied evidence, and source URLs are persisted onchain.
+## Trust model
 
-## Why GenLayer
+The creator is also the resolver. That authority is fixed when the promise is created, and only the creator address may call `resolve_promise`. An arbitrary third party cannot race to resolve a pending promise.
 
-A deterministic smart contract can enforce timestamps, ownership, replay protection, and exact numeric rules. It cannot reliably interpret whether an arbitrary real-world commitment written in natural language was actually fulfilled.
+Caller-supplied evidence is unauthenticated supporting context. It may be false, incomplete, or adversarial and cannot replace source proof. Validators independently retrieve the stored precommitted HTTPS URLs inside the nondeterministic consensus path and independently evaluate the retrieved material against the stored commitment and criteria.
 
-Promise keeps deterministic lifecycle rules onchain while using GenLayer nondeterministic execution for two things that ordinary deterministic contracts cannot safely perform alone:
+If every precommitted source is unavailable, the result is `INCONCLUSIVE` rather than being decided from caller text alone. Source contents are not treated as mathematically authoritative: the contract proves which URLs were committed and which material validators independently retrieved, not that a publisher is truthful or that the creator selected the best possible source.
 
-1. retrieving current external web content;
-2. semantically evaluating that content against natural-language fulfillment criteria.
-
-The core flow is:
+## Lifecycle
 
 ```text
-Create commitment
+Create commitment, criteria, deadline, reference, and HTTPS sources
       ↓
-Wait until deadline
+Persist the source list and fingerprint before the deadline
       ↓
-Submit supporting context + HTTPS source URLs
+Wait until the deadline
       ↓
-Each validator independently fetches the sources
+Creator submits promise_id + supporting evidence
       ↓
-Each validator independently evaluates the evidence
+Leader and validators independently fetch the stored source list
       ↓
-FULFILLED / FAILED / INCONCLUSIVE
+Validators independently evaluate the same precommitted evidence set
       ↓
-Persist the consensus-bound resolution onchain
+Persist FULFILLED / FAILED / INCONCLUSIVE once
 ```
 
-## Evidence trust model
+Resolution accepts only `promise_id` and supporting `evidence`. It does not accept new source URLs. A caller therefore cannot substitute a new source set at or after the deadline.
 
-Promise v2 does not treat caller-supplied evidence text as authoritative proof of real-world events.
-
-The caller provides:
-
-- supporting evidence text;
-- up to five HTTPS source URLs.
-
-The evidence text is explicitly treated as unauthenticated context and may be false, incomplete, or adversarial. For externally verifiable real-world claims, validators are instructed not to return `FULFILLED` solely because the caller asserts that something happened.
-
-Instead, each validator independently retrieves the submitted URLs with GenLayer web access inside the nondeterministic consensus path and evaluates the fetched material together with the immutable commitment and fulfillment criteria.
-
-This removes the previous v1 trust model in which a caller could describe an external event without the contract independently acquiring any external evidence.
-
-### What this trust model does and does not prove
-
-Independent acquisition verifies what the submitted URLs served to validators at resolution time. It does not by itself prove that a publisher is authoritative, that every web claim is objectively true, or that a caller selected the best possible sources.
-
-The source URLs are caller-selected. Their contents are independently acquired by validators rather than copied from caller-supplied text.
-
-If every submitted source is unavailable, Promise resolves the nondeterministic evaluation to `INCONCLUSIVE` rather than treating unauthenticated caller text as sufficient proof.
-
-## Consensus and nondeterministic boundary
-
-Promise deliberately separates deterministic state handling from nondeterministic work.
-
-Before entering nondeterministic execution, the contract validates and captures the immutable promise data and submitted URLs. Inside the consensus closures, validators may perform web retrieval and LLM evaluation, but they do not mutate contract storage. State is written only after `gl.vm.run_nondet` returns a valid consensus result.
-
-Each validator independently:
-
-1. fetches the same submitted HTTPS source URLs;
-2. constructs the adjudication prompt from the stored promise, caller context, and fetched sources;
-3. evaluates the promise;
-4. validates the model response schema.
-
-Consensus binds the state-changing field, `verdict`, rather than requiring free-form reasoning text to be byte-for-byte identical. This allows validators to agree on the semantic decision while expressing different explanations.
-
-Raw web page text is not compared with strict equality because independently fetched web content can vary between validators. The consensus target is the derived verdict.
-
-## Prompt isolation
-
-Commitment text, fulfillment criteria, caller evidence, and fetched web content are all treated as untrusted data.
-
-The adjudication prompt explicitly instructs validators to ignore embedded commands, fake system messages, role changes, output-format overrides, and other instruction-like content inside those fields.
-
-The test suite includes prompt-injection cases in:
-
-- caller-supplied evidence;
-- commitment text;
-- fulfillment criteria;
-- independently fetched source content;
-- adversarial JSON-like payloads.
-
-This is prompt-injection hardening, not a claim that prompt injection is mathematically impossible.
-
-## Contract behavior
-
-Each promise stores:
-
-- creator;
-- natural-language commitment;
-- fulfillment criteria;
-- deadline;
-- creator-scoped reference;
-- deterministic SHA-256 fingerprint of the original promise inputs;
-- status;
-- final verdict;
-- reasoning;
-- caller-supplied evidence;
-- submitted source URLs.
-
-Important safeguards:
-
-- references are unique per creator;
-- original commitment and fulfillment criteria cannot be changed after creation;
-- resolution is only allowed after the deadline;
-- a promise can only be resolved once;
-- contract inputs are bounded and validated;
-- source lists must be non-empty for resolution;
-- a resolution accepts at most five sources;
-- source URLs must use `https://`;
-- duplicate source URLs are rejected;
-- each source URL is limited to 2,048 characters;
-- fetched source text is bounded to 8,000 characters per source before prompting;
-- model responses must use the exact expected schema;
-- verdicts are restricted to `FULFILLED`, `FAILED`, or `INCONCLUSIVE`;
-- all-source retrieval failure yields `INCONCLUSIVE`;
-- storage mutation occurs only after a valid consensus result;
-- source URLs are persisted for auditability;
-- contract errors use GenVM-compatible `gl.vm.UserError`;
-- helper signatures pass the current GenVM linter.
-
-## Public methods
+## Contract API
 
 ### Views
 
@@ -143,210 +51,139 @@ Important safeguards:
 
 ### Writes
 
-- `create_promise(commitment, fulfillment_criteria, deadline, reference)`
-- `resolve_promise(promise_id, evidence, sources)`
+```python
+create_promise(
+    commitment,
+    fulfillment_criteria,
+    deadline,
+    reference,
+    sources,
+)
 
-`ping()` returns:
-
-```text
-promise-v2
+resolve_promise(
+    promise_id,
+    evidence,
+)
 ```
 
-## Tests
+`get_promise(promise_id)` exposes the creator, resolver, commitment, fulfillment criteria, deadline, reference, precommitted sources, fingerprint, status, verdict, reasoning, and caller evidence.
 
-Run:
+The possible verdicts are:
+
+- `FULFILLED`
+- `FAILED`
+- `INCONCLUSIVE`
+
+## Consensus boundary
+
+Deterministic lifecycle rules are handled onchain. Before entering nondeterministic execution, the contract validates and captures the immutable promise data, the creator authority, and the stored source list. The consensus closures do not mutate contract storage.
+
+The leader fetches every stored URL and evaluates the result. Each validator independently fetches those same stored URLs again and independently evaluates the result. Consensus binds the verdict, not free-form reasoning, so validators may use different explanations while agreeing on the semantic decision.
+
+The prompt treats commitment text, fulfillment criteria, caller evidence, and fetched page text as untrusted data. Embedded commands, fake system messages, role changes, and output-format instructions in those fields are ignored.
+
+## Contract safeguards
+
+- creator and resolver are bound at creation;
+- only the creator may resolve;
+- resolution is blocked until after the stored deadline;
+- a promise can be resolved only once;
+- source URLs are validated before storage and must use `https://`;
+- source lists are non-empty, duplicate-free, and limited to five URLs;
+- each source URL is limited to 2,048 characters;
+- fetched source text is limited to 8,000 characters per source before prompting;
+- source URLs have no public post-creation mutator;
+- the source list participates in the SHA-256 promise fingerprint;
+- malformed model responses do not mutate promise state;
+- all-source retrieval failure yields `INCONCLUSIVE`;
+- caller evidence remains unauthenticated context;
+- GenVM-compatible `gl.vm.UserError` paths are used.
+
+## Tests and validation
+
+Run the direct-mode suite with the installed GenVM runner:
 
 ```bash
 gltest test/test_promise.py -q
 ```
 
-Current result:
+The suite covers 31 tests, including:
 
-```text
-27 passed in 0.73s
-```
-
-The direct-mode suite covers:
-
-- deployment and initial state;
-- promise creation and persistence;
-- deterministic fingerprints;
-- creator-scoped reference protection;
-- creation input validation;
-- oversized inputs;
+- creation-time source validation and persistence;
+- creator-only resolution and pending state after an unauthorized attempt;
+- the absence of a resolution-time source argument;
+- source-list fingerprint participation;
+- the absence of a public source mutator;
 - deadline enforcement;
 - all three verdicts;
-- source URL persistence;
+- unavailable-source fallback to `INCONCLUSIVE`;
 - malformed model output without state mutation;
 - one-time resolution;
-- empty source rejection;
-- non-HTTPS source rejection;
-- duplicate source rejection;
-- maximum source-count enforcement;
-- unavailable-source fallback to `INCONCLUSIVE`;
-- prompt injection in caller evidence;
-- fake `SYSTEM` instructions;
-- prompt injection in criteria;
-- prompt injection in commitment text;
-- adversarial JSON-like payloads;
-- prompt injection inside independently fetched source content;
-- validator agreement;
-- validator re-fetch behavior;
-- validator disagreement;
-- same verdict with different reasoning.
+- unauthenticated caller evidence and prompt-injection handling;
+- leader and validator retrieval of every precommitted URL;
+- validator disagreement and same-verdict/different-reasoning behavior.
 
-## GenVM lint
-
-Promise v2 passes the current GenVM linter used for resubmission:
+Compile and validate the contract with:
 
 ```bash
+python3 -m py_compile contracts/promise.py
 genvm-lint check contracts/promise.py
 ```
 
-Result:
+The current validation result is:
 
 ```text
-✓ Lint passed (3 checks)
-✓ Validation passed
-  Contract: Promise
-  Methods: 6 (4 view, 2 write)
+Lint passed (3 checks)
+Validation passed
+Contract: Promise
+Methods: 6 (4 view, 2 write)
 ```
-
-This specifically addresses the previous lint rejection involving unsupported helper signatures and bare `ValueError` paths.
 
 ## Bradbury deployment
 
-Promise v2 contract:
+The verified v3 source is `contracts/promise.py`. The contract is deployed to Bradbury at the address and transaction recorded below after the source, lint, SDK validation, and Direct Mode checks passed.
+
+Promise v3 contract:
 
 ```text
-0x8b44023c995Ed001A83A122f23a4a6B147bcbdE5
+0x05A332eeE29A00543976e8328F6B10729a48A84e
 ```
 
 Deployment transaction:
 
 ```text
-0xaea4ca9dcb32d2176c97c99d0fd936f554957f3d2ee99f260c536937db3e80c2
+0x344e37c2e8a2139ab1f74f82b51af6e5a931db32079117c48fa38fb042a495c5
 ```
 
-Deployment completed with:
+The deployment was observed as `ACCEPTED` with consensus `AGREE` and execution `FINISHED_WITH_RETURN`. The SDK wait for finalization timed out, so this README does not claim that the deployment reached `FINALIZED`.
+
+Bradbury RPC:
 
 ```text
-ACCEPTED
-AGREE
-FINISHED_WITH_RETURN
+https://rpc-bradbury.genlayer.com
 ```
 
-Live `ping()` returned:
+The previous Promise v2 deployment `0x8b44023c995Ed001A83A122f23a4a6B147bcbdE5` is superseded and must not be used for the resubmission.
+
+Live proof transaction IDs:
 
 ```text
-promise-v2
+create: 0x0aa021eae51a11c10ff1fc54ae7887cc91cb1db2380bec4318ec876572a5470d
+resolve: 0xffd53b0df07fe1681aeed738d622c4b35e593e201a11b5c85b195e8c7d156b00
+unauthorized attempt: not run; Direct Mode covers creator-only authorization and no second signer was used
 ```
 
-## Live Bradbury evidence-acquisition proof
-
-A live promise was created with:
-
-```text
-commitment:
-Publish the GenLayer documentation
-
-fulfillment criteria:
-The GenLayer documentation is publicly accessible online
-
-reference:
-promise-v2-live-001
-
-promise id:
-0
-```
-
-Creation transaction:
-
-```text
-0xf45759daa1f4bc5fdb306155570acbb710af6279dac81f47cb0590774ff45890
-```
-
-The resolution supplied the official GenLayer developer documentation URL:
-
-```text
-https://docs.genlayer.com/developers
-```
-
-Resolution transaction:
-
-```text
-0xc6252e1b20fa15e8295c951aed8570c157acab49b7094b3f8e233629f59b745e
-```
-
-After finalization, `get_promise(0)` returned:
-
-```text
-status: RESOLVED
-verdict: FULFILLED
-sources: ["https://docs.genlayer.com/developers"]
-```
-
-The persisted reasoning states that the independently fetched GenLayer developer source was available and contained documentation covering developer guides, protocol concepts, tooling, deployment, testing, and API references, establishing that the GenLayer documentation was publicly accessible online.
-
-This live run demonstrates the v2 evidence path that was missing from the rejected version: the material external source is fetched by the contract's nondeterministic validator execution rather than accepted only as caller-supplied prose.
+The live proof created one future-deadline promise with a unique reference and precommitted HTTPS source list. A post-creation read verified the creator, resolver, sources, and fingerprint before the deadline. The authorized creator then submitted `resolve_promise` after the deadline using only `promise_id` and supporting evidence; the transaction reached `VALIDATORS_TIMEOUT` with `TIMEOUT` consensus and `FINISHED_WITH_RETURN`, so the promise correctly remained `PENDING` and no false resolution is claimed. The leader output recorded that the precommitted source was independently fetched and available. A higher-rotation retry was rejected by the consensus contract, and a normal-settings retry was also rejected after the timeout.
 
 ## Run locally
-
-Create and activate a virtual environment, then install dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-Run the tests:
-
-```bash
 gltest test/test_promise.py -q
-```
-
-Run GenVM lint:
-
-```bash
 genvm-lint check contracts/promise.py
 ```
-
-## Deploy
-
-```bash
-genlayer deploy \
-  --contract contracts/promise.py \
-  --rpc https://rpc-bradbury.genlayer.com
-```
-
-For nondeterministic resolution writes on Bradbury, the tested CLI invocation used an explicit fee distribution:
-
-```bash
-genlayer write \
-  <CONTRACT_ADDRESS> \
-  resolve_promise \
-  --rpc https://rpc-bradbury.genlayer.com \
-  --fees '{"distribution":{"leaderTimeunitsAllocation":"100","validatorTimeunitsAllocation":"200","rotations":["0"]}}' \
-  --args \
-  <PROMISE_ID> \
-  '<SUPPORTING_EVIDENCE>' \
-  '["https://example.com/source"]'
-```
-
-## Reviewer checklist
-
-- Contract source passes current `genvm-lint` with zero diagnostics.
-- Direct-mode suite passes: 27 tests.
-- Real-world evidence is no longer judged only from caller-supplied prose.
-- Validators independently acquire submitted HTTPS sources inside nondeterministic execution.
-- Caller evidence remains explicitly unauthenticated supporting context.
-- All-source retrieval failure resolves to `INCONCLUSIVE`.
-- Nondeterministic execution does not mutate contract storage directly.
-- Only a validated consensus result is persisted.
-- Source URLs remain onchain for auditability.
-- Deployed Bradbury contract returns `promise-v2`.
-- Live Bradbury resolution persisted `RESOLVED / FULFILLED` with the independently fetched source URL.
 
 ## Repository structure
 
@@ -361,10 +198,6 @@ requirements.txt
 README.md
 LICENSE
 ```
-
-## Status
-
-Promise v2 is implemented, lint-clean, covered by 27 direct-mode tests, deployed to GenLayer Bradbury, and proven live with independent web evidence acquisition and a finalized `FULFILLED` resolution.
 
 ## License
 

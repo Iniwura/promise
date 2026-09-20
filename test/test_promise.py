@@ -1,4 +1,5 @@
 import json
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 
 CONTRACT = "contracts/promise.py"
 SOURCE = "https://example.com/evidence"
+SOURCE_ALT = "https://example.org/approved"
 WEB_OK = {"method": "GET", "status": 200, "body": "Independent source confirms the promised result."}
 
 
@@ -21,9 +23,16 @@ def mock_source(direct_vm, body=WEB_OK["body"]):
     direct_vm.mock_web(r"example\.com/evidence", {"method": "GET", "status": 200, "body": body})
 
 
-def create_ready(promise, direct_vm, reference="ready", commitment="Do it", criteria="Done"):
+def create_ready(
+    promise,
+    direct_vm,
+    reference="ready",
+    commitment="Do it",
+    criteria="Done",
+    sources=None,
+):
     deadline = future_timestamp(60)
-    promise_id = promise.create_promise(commitment, criteria, deadline, reference, [SOURCE])
+    promise_id = promise.create_promise(commitment, criteria, deadline, reference, sources or [SOURCE])
     direct_vm.warp(datetime.fromtimestamp(deadline + 1, timezone.utc).isoformat())
     return promise_id
 
@@ -49,11 +58,41 @@ def test_create_persists_precommitted_sources_and_fingerprint(direct_deploy, dir
     assert first["deadline"] == deadline
     assert first["reference"] == "report-1"
     assert first["status"] == "PENDING"
+    assert first["verdict"] == ""
     assert first["sources"] == [SOURCE]
     assert first["evidence"] == ""
     assert len(first["fingerprint"]) == 64
     assert promise.get_promise(promise_id)["fingerprint"] == first["fingerprint"]
     assert promise.is_reference_used("report-1") is True
+
+
+def test_source_list_participates_in_fingerprint(direct_deploy, direct_vm):
+    promise = deploy(direct_deploy)
+    deadline = future_timestamp()
+
+    first_id = promise.create_promise("Do it", "Done", deadline, "same-a", [SOURCE])
+    second_id = promise.create_promise("Do it", "Done", deadline, "same-b", [SOURCE_ALT])
+    first = promise.get_promise(first_id)
+    second = promise.get_promise(second_id)
+
+    expected = hashlib.sha256(
+        json.dumps(
+            {
+                "commitment": "Do it",
+                "criteria": "Done",
+                "creator": first["creator"],
+                "resolver": first["resolver"],
+                "deadline": deadline,
+                "reference": "same-a",
+                "sources": [SOURCE],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert first["fingerprint"] == expected
+    assert first["fingerprint"] != second["fingerprint"]
 
 
 def test_references_are_creator_scoped(direct_deploy, direct_alice, direct_bob, direct_vm):
@@ -134,9 +173,21 @@ def test_resolution_uses_only_precommitted_sources(direct_deploy, direct_vm):
     promise = deploy(direct_deploy)
     create_ready(promise, direct_vm, "bound-source")
     assert promise.get_promise(0)["sources"] == [SOURCE]
+    with direct_vm.expect_revert():
+        promise.resolve_promise(0, "supporting context", [SOURCE_ALT])
+    assert promise.get_promise(0)["status"] == "PENDING"
     mock_source(direct_vm)
     direct_vm.mock_llm(r"UNTRUSTED", json.dumps({"verdict": "FULFILLED", "reasoning": "bound source confirms"}))
     promise.resolve_promise(0, "supporting context")
+    assert promise.get_promise(0)["sources"] == [SOURCE]
+
+
+def test_precommitted_sources_have_no_public_mutator(direct_deploy, direct_vm):
+    promise = deploy(direct_deploy)
+    create_ready(promise, direct_vm, "immutable-source")
+
+    assert not hasattr(promise, "set_sources")
+    assert not hasattr(promise, "update_sources")
     assert promise.get_promise(0)["sources"] == [SOURCE]
 
 
@@ -222,6 +273,19 @@ def test_validator_refetches_and_agrees_with_same_verdict(direct_deploy, direct_
     direct_vm.mock_llm(r"UNTRUSTED", json.dumps({"verdict": "FULFILLED", "reasoning": "evidence satisfies"}))
     assert promise.resolve_promise(0, "evidence")["verdict"] == "FULFILLED"
     assert direct_vm.run_validator() is True
+
+
+def test_validator_refetches_every_precommitted_source(direct_deploy, direct_vm):
+    promise = deploy(direct_deploy)
+    create_ready(promise, direct_vm, "validator-sources", sources=[SOURCE, SOURCE_ALT])
+    direct_vm.mock_web(r"example\.com/evidence", {"method": "GET", "status": 200, "body": "Source one."})
+    direct_vm.mock_web(r"example\.org/approved", {"method": "GET", "status": 200, "body": "Source two."})
+    direct_vm.mock_llm(r"UNTRUSTED", json.dumps({"verdict": "FULFILLED", "reasoning": "both sources"}))
+
+    assert promise.resolve_promise(0, "evidence")["verdict"] == "FULFILLED"
+    direct_vm._web_mocks_hit.clear()
+    assert direct_vm.run_validator() is True
+    assert direct_vm._web_mocks_hit == {0, 1}
 
 
 def test_validator_refetches_and_rejects_different_verdict(direct_deploy, direct_vm):
